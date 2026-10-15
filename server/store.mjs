@@ -5,9 +5,21 @@ export class FirestoreStore {
   async remove(path) { await this.db.doc(path).delete(); }
   async list(path, limit = 100) { const q = await this.db.collection(path).limit(limit).get(); return q.docs.map(d => ({ ...d.data(), id: d.id, path: d.ref.path })); }
   async query(name, filters, limit = 30, group = false) {
-    let q = group ? this.db.collectionGroup(name) : this.db.collection(name);
-    for (const [key, op, value] of filters) q = q.where(key, op, value);
-    const r = await q.limit(limit).get(); return r.docs.map(d => ({ ...d.data(), id: d.id, path: d.ref.path }));
+    try {
+      let q = group ? this.db.collectionGroup(name) : this.db.collection(name);
+      for (const [key, op, value] of filters) q = q.where(key, op, value);
+      const r = await q.limit(limit).get(); return r.docs.map(d => ({ ...d.data(), id: d.id, path: d.ref.path }));
+    } catch (e) {
+      if (!group || e.code !== 9) throw e;
+      const users = await this.list('users', 30), results = [];
+      for (const u of users.filter(u => u.enabled)) {
+        const docs = await this.list(`users/${u.id}/${name}`, 100);
+        for (const d of docs) {
+          if (filters.every(([k, op, v]) => op === '==' ? d[k] === v : op === '<=' ? d[k] <= v : op === 'in' ? v.includes(d[k]) : false)) results.push(d);
+        }
+      }
+      return results.slice(0, limit);
+    }
   }
   async atomic(path, callback) {
     return this.db.runTransaction(async tx => {

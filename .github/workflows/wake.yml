@@ -10,18 +10,33 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install dependencies when fallback worker is needed
+        if: ${{ secrets.DOTS_BACKEND_URL == '' }}
+        run: npm ci --omit=dev
       - name: Deliver scheduled work
         env:
           DOTS_BACKEND_URL: ${{ secrets.DOTS_BACKEND_URL }}
           DOTS_WAKE_SECRET: ${{ secrets.DOTS_WAKE_SECRET }}
+          DOTS_PROVIDER_CONFIG: ${{ secrets.DOTS_PROVIDER_CONFIG }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
-          python3 - <<'PY'
-          import hashlib,hmac,os,time,urllib.request
-          timestamp=str(int(time.time()*1000))
-          signature=hmac.new(os.environ['DOTS_WAKE_SECRET'].encode(),timestamp.encode(),hashlib.sha256).hexdigest()
-          request=urllib.request.Request(os.environ['DOTS_BACKEND_URL'].rstrip('/')+'/wake',data=b'{}',headers={'Content-Type':'application/json','X-Dots-Time':timestamp,'X-Dots-Signature':signature})
-          with urllib.request.urlopen(request,timeout=50) as response:
-              print('Scheduled work accepted:',response.status)
-          PY
+          if [ -n "$DOTS_BACKEND_URL" ]; then
+            python3 - <<'PY'
+            import hashlib,hmac,os,time,urllib.request
+            timestamp=str(int(time.time()*1000))
+            signature=hmac.new(os.environ['DOTS_WAKE_SECRET'].encode(),timestamp.encode(),hashlib.sha256).hexdigest()
+            request=urllib.request.Request(os.environ['DOTS_BACKEND_URL'].rstrip('/')+'/wake',data=b'{}',headers={'Content-Type':'application/json','X-Dots-Time':timestamp,'X-Dots-Signature':signature})
+            with urllib.request.urlopen(request,timeout=50) as response:
+                print('Scheduled work accepted:',response.status)
+            PY
+          else
+            GITHUB_WAKE_SECRET="$DOTS_WAKE_SECRET" node scripts/run-once.mjs
+          fi

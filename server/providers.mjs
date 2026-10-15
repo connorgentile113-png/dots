@@ -47,7 +47,7 @@ export class Providers {
     const response = await this.fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method:'POST', headers:{'Authorization':`Bearer ${this.env.NVIDIA_API_KEY}`,'Content-Type':'application/json'},
       body:JSON.stringify({model,messages,temperature:0.2,max_tokens:1800,stream:false,...(recovery ? {} : {tools:TOOL_DEFINITIONS,tool_choice:'auto'})}),
-      signal:AbortSignal.timeout(85_000)
+      signal:AbortSignal.timeout(Number(this.env.MODEL_TIMEOUT_MS || 85000))
     });
     if (response.status === 429 || response.status === 503) {
       const until = retryAt(response.headers,cooldown?.attempt || 0);
@@ -67,7 +67,7 @@ export class Providers {
     let provider = args.provider || 'auto';
     if (!['auto','cloudflare','browserless'].includes(provider)) throw new Error('Unknown browser provider');
     if (provider === 'auto') provider = this.env.CLOUDFLARE_API_TOKEN && (cf?.used || 0) + 45 <= 540 ? 'cloudflare' : 'browserless';
-    const sessionSeconds = provider === 'cloudflare' ? 45 : Math.min(120,Number(this.env.BROWSERLESS_SESSION_SECONDS || 60));
+    const sessionSeconds = provider === 'cloudflare' ? Math.min(45,Number(this.env.BROWSER_SESSION_SECONDS || 45)) : Math.min(120,Number(this.env.BROWSERLESS_SESSION_SECONDS || 60));
     let browser, sessionId, killTimer; const started = Date.now();
     const streamPath = `users/${uid}/streams/${runId}`;
     const publish = async (page, cursor, label) => {
@@ -149,9 +149,9 @@ export class Providers {
   async dispatchCommand(run, command, operationId) {
     const {repo,branch} = await this.privateRepo();
     const callbackURL = this.env.PUBLIC_BACKEND_URL;
-    if (!callbackURL?.startsWith('https://') || !this.env.GITHUB_WAKE_SECRET) throw new Error('Backend URL and workflow secret must be configured');
+    if ((callbackURL && !callbackURL.startsWith('https://')) || !this.env.GITHUB_WAKE_SECRET) throw new Error('Workflow secret and optional HTTPS backend URL must be configured');
     const token = createHmac('sha256',this.env.GITHUB_WAKE_SECRET).update(`${run.uid}:${run.id}:${operationId}`).digest('hex');
-    await this.github(`/repos/${repo}/actions/workflows/${this.env.GITHUB_COMMAND_WORKFLOW || 'agent-command.yml'}/dispatches`,{method:'POST',body:JSON.stringify({ref:branch,inputs:{uid:run.uid,run_id:run.id,operation_id:operationId,script_b64:Buffer.from(command).toString('base64'),callback_url:`${callbackURL}/command-result`,callback_token:token}})});
+    await this.github(`/repos/${repo}/actions/workflows/${this.env.GITHUB_COMMAND_WORKFLOW || 'agent-command.yml'}/dispatches`,{method:'POST',body:JSON.stringify({ref:branch,inputs:{uid:run.uid,run_id:run.id,operation_id:operationId,script_b64:Buffer.from(command).toString('base64'),callback_url:callbackURL?`${callbackURL}/command-result`:'firebase',callback_token:token}})});
     return {operationId,status:'dispatched'};
   }
   async backup(data) {

@@ -18,7 +18,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Run isolated command and publish output
+      - uses: actions/checkout@v4
+        if: ${{ inputs.callback_url == 'firebase' }}
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.callback_url == 'firebase' }}
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install dependencies for direct Firestore runner
+        if: ${{ inputs.callback_url == 'firebase' }}
+        run: npm ci --omit=dev
+      - name: Run isolated command via Firestore and continue agent
+        if: ${{ inputs.callback_url == 'firebase' }}
+        env:
+          TASK_UID: ${{ inputs.uid }}
+          TASK_RUN_ID: ${{ inputs.run_id }}
+          TASK_OPERATION_ID: ${{ inputs.operation_id }}
+          TASK_SCRIPT: ${{ inputs.script_b64 }}
+          TASK_CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          GITHUB_WAKE_SECRET: ${{ secrets.DOTS_WAKE_SECRET }}
+          DOTS_PROVIDER_CONFIG: ${{ secrets.DOTS_PROVIDER_CONFIG }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          node scripts/runner-command.mjs
+          node scripts/run-once.mjs
+      - name: Run isolated command and publish output to HTTP backend
+        if: ${{ inputs.callback_url != 'firebase' }}
         env:
           TASK_UID: ${{ inputs.uid }}
           TASK_RUN_ID: ${{ inputs.run_id }}

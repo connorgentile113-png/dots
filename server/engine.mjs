@@ -57,7 +57,7 @@ export class Engine {
           if (!existing && (await this.store.list(`users/${uid}/dots`,21)).length >= 20) throw new Error('Maximum 20 dots');
           const model=p.model || 'auto';
           if (model !== 'auto' && !this.providers.models.some(m=>m.id===model)) throw new Error('Model is not configured');
-          await this.store.set(userPath(uid,'dots',id),{name:text(p.name,60),instructions:text(p.instructions || 'Be helpful and verify results.',4000),model,allowBrowser:p.allowBrowser===true,allowTerminal:p.allowTerminal===true,allowSchedules:p.allowSchedules===true,updatedAt:now,...(!existing?{createdAt:now}:{})});
+          await this.store.set(userPath(uid,'dots',id),{name:text(p.name,60),instructions:text(p.instructions || 'Be helpful and verify results.',4000),model,allowBrowser:p.allowBrowser===true,allowTerminal:p.allowTerminal===true,autoApproveTerminal:p.autoApproveTerminal===true,allowSchedules:p.allowSchedules===true,updatedAt:now,...(!existing?{createdAt:now}:{})});
           if (p.startupPrompt && !existing) await this.newRun(uid,`startup_${command.id}`,text(p.startupPrompt),id);
           break;
         }
@@ -181,7 +181,22 @@ export class Engine {
             if(!dot.allowTerminal) throw new Error('Terminal is disabled for this dot');
             if(calls.length!==1) throw new Error('Request terminal execution as the only tool call in a step');
             const operationId=hash(`${run.id}:${run.steps}:${key}`).slice(0,32);
-            await this.store.set(userPath(run.uid,'approvals',operationId),{runId:run.id,command:text(args.command,8000),reason:text(args.reason,1000),status:'pending',createdAt:Date.now(),expiresAt:Date.now()+24*3600000,toolCallId:call.id});
+            const commandText=text(args.command,8000), reasonText=text(args.reason,1000);
+            if(dot.autoApproveTerminal || this.env.AUTO_APPROVE_TERMINAL==='true') {
+              await this.store.set(userPath(run.uid,'approvals',operationId),{runId:run.id,command:commandText,reason:reasonText,status:'dispatching',createdAt:Date.now(),expiresAt:Date.now()+24*3600000,toolCallId:call.id});
+              await update({status:'waiting_external',operationId,pendingToolCallId:call.id,externalDeadline:Date.now()+12*60000,context:compactContext(context),leaseUntil:0});
+              try {
+                await this.providers.dispatchCommand(run,commandText,operationId);
+                await this.store.set(userPath(run.uid,'approvals',operationId),{status:'dispatched'});
+                await this.message(run.uid,run.id,'system',`Dispatched sandbox command on GitHub Actions: ${reasonText}`);
+                return;
+              } catch(e) {
+                await this.store.set(userPath(run.uid,'approvals',operationId),{status:'uncertain'});
+                await update({status:'failed',lastError:'Command dispatch could not be confirmed. Check GitHub before any new execution.',leaseUntil:0});
+                throw e;
+              }
+            }
+            await this.store.set(userPath(run.uid,'approvals',operationId),{runId:run.id,command:commandText,reason:reasonText,status:'pending',createdAt:Date.now(),expiresAt:Date.now()+24*3600000,toolCallId:call.id});
             await update({status:'waiting_approval',operationId,pendingToolCallId:call.id,context:compactContext(context),leaseUntil:0});
             await this.message(run.uid,run.id,'system','A terminal command is ready for your approval.'); return;
           }

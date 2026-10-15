@@ -74,6 +74,19 @@ test('terminal commands require approval, dispatch once, and accept one result',
 test('uncertain terminal dispatch is never automatically retried',async()=>{
   const f=await fixture([tool('terminal',{command:'echo hello',reason:'test'})]);f.providers.dispatchCommand=async()=>{throw new Error('Network interrupted');};await f.engine.runStep(await run(f));const r=await f.store.get('users/alice/runs/run1');await queuedCommand(f,'approve','approve',{id:r.operationId,allow:true});assert.equal((await f.store.get('users/alice/runs/run1')).status,'failed');assert.equal((await queuedCommand(f,'resume','resume',{id:'run1'})).status,'error');
 });
+test('auto-approved terminal commands dispatch immediately via GitHub Actions',async()=>{
+  const f=await fixture([tool('terminal',{command:'echo auto',reason:'Auto CLI test'}),done('CLI output verified')]);
+  await f.store.set('users/alice/dots/default',{autoApproveTerminal:true});
+  let dispatchedOp=null;
+  f.providers.dispatchCommand=async(r,cmd,op)=>{dispatchedOp=op;return {operationId:op,status:'dispatched'};};
+  await f.engine.runStep(await run(f));
+  const r=await f.store.get('users/alice/runs/run1');
+  assert.equal(r.status,'waiting_external');
+  assert.ok(dispatchedOp);
+  assert.equal(await f.engine.commandResult({uid:'alice',run_id:'run1',operation_id:dispatchedOp,exit_code:0,output:'auto'}),true);
+  await f.engine.runStep(await f.store.get('users/alice/runs/run1'));
+  assert.equal((await f.store.get('users/alice/runs/run1')).status,'completed');
+});
 test('only one worker can hold a run lease',async()=>{
   let release;const f=await fixture();f.providers.model=()=>new Promise(resolve=>{release=()=>resolve(done('done'));});const r=await run(f);const first=f.engine.runStep(r);while(!release)await new Promise(resolve=>setImmediate(resolve));const other=new Engine(f.store,f.providers,{});await other.runStep(r);release();await first;assert.equal((await f.store.get('users/alice/runs/run1')).steps,1);
 });

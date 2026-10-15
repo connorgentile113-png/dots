@@ -1,12 +1,7 @@
 import http from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
-import { FirestoreStore } from './store.mjs';
-import { Providers } from './providers.mjs';
-import { Engine } from './engine.mjs';
+import { runtime } from './runtime.mjs';
 import { identifier } from './core.mjs';
 
 export function equalToken(a,b) { return typeof a==='string' && typeof b==='string' && a.length===b.length && timingSafeEqual(Buffer.from(a),Buffer.from(b)); }
@@ -45,18 +40,7 @@ export function makeServer(engine, env = process.env) {
 
 export function start(env=process.env) {
   if(!env.FIREBASE_SERVICE_ACCOUNT_JSON) throw new Error('Set FIREBASE_SERVICE_ACCOUNT_JSON to the service account JSON in Koyeb secrets');
-  const account=JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
-  if(account.project_id!==env.FIREBASE_PROJECT_ID) throw new Error('Service account and Firebase project do not match');
-  initializeApp({credential:cert(account),projectId:env.FIREBASE_PROJECT_ID});
-  const db=getFirestore(); db.settings({ignoreUndefinedProperties:true});
-  const store=new FirestoreStore(db), providers=new Providers(store,env), engine=new Engine(store,providers,env);
-  engine.ensureOwner=async()=>{
-    if(!env.OWNER_EMAIL) return;
-    try {
-      const user=await getAuth().getUserByEmail(env.OWNER_EMAIL);
-      if(user.emailVerified && !user.disabled) await store.set(`users/${user.uid}`,{enabled:true});
-    } catch(e) { if(e.code!=='auth/user-not-found') throw e; }
-  };
+  const {engine}=runtime(env);
   const server=makeServer(engine,env);
   server.listen(Number(env.PORT||8000),'0.0.0.0',()=>console.log('Dots worker listening'));
   const timer=setInterval(()=>engine.tick().catch(e=>console.error('Worker scan failed:',e.code || e.name)),30000);
