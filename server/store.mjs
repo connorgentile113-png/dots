@@ -10,7 +10,7 @@ export class FirestoreStore {
       for (const [key, op, value] of filters) q = q.where(key, op, value);
       const r = await q.limit(limit).get(); return r.docs.map(d => ({ ...d.data(), id: d.id, path: d.ref.path }));
     } catch (e) {
-      if (!group || e.code !== 9) throw e;
+      if (!group || (e.code !== 9 && !/requires a.*index/i.test(e.message || ''))) throw e;
       const users = await this.list('users', 30), results = [];
       for (const u of users.filter(u => u.enabled)) {
         const docs = await this.list(`users/${u.id}/${name}`, 100);
