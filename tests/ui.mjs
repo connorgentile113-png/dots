@@ -1,0 +1,46 @@
+import { chromium } from 'playwright';
+import http from 'node:http';
+import { readFile,mkdir } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const html=await readFile('index.html');
+const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(html);});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+const page=await browser.newPage({viewport:{width:1440,height:1080}}),errors=[],external=[];
+page.on('pageerror',e=>errors.push(e.message));
+page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:')&&!r.url().startsWith('data:'))external.push(r.url());});
+const origin=`http://127.0.0.1:${server.address().port}`;
+try{
+  await page.goto(origin+'/?demo=1');await page.getByText('A little help.').waitFor();
+  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/desktop.png',fullPage:true});
+  await page.getByRole('button',{name:'Create a dot',exact:true}).last().click();
+  await page.getByLabel('Name',{exact:true}).fill('Personal researcher');
+  await page.getByLabel('Instructions',{exact:true}).fill('Research facts and cite sources.');
+  await page.getByRole('button',{name:'Save dot'}).click();await page.getByText('Personal researcher',{exact:true}).first().waitFor();
+  await page.getByRole('button',{name:'Schedules',exact:true}).click();
+  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByLabel('What should your dot do?').fill('Check new public research');
+  await page.getByLabel('Every (minutes)').fill('60');await page.getByRole('button',{name:'Create schedule'}).click();
+  await page.getByRole('heading',{name:'Check new public research'}).waitFor();
+  await page.getByRole('button',{name:'Pause schedule'}).last().click();
+  await page.getByRole('button',{name:'Memory',exact:true}).click();
+  await page.getByRole('button',{name:'Delete memory'}).click();await page.getByText('Memory with intention',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'New task'}).click();
+  await page.getByLabel('What would you like to get done?').fill('<img src=x onerror=alert(1)> Research design systems');
+  await page.getByRole('button',{name:'Send task'}).click();await page.getByText('This is an interface preview.',{exact:false}).waitFor();
+  assert.equal(await page.locator('.message-body img').count(),0,'Task text must not execute HTML');
+  await page.getByRole('button',{name:'Stop',exact:true}).click();
+  await page.getByText(/Task .*cancelled/).waitFor();
+  await page.getByRole('button',{name:'Toggle color theme'}).click();assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await page.getByRole('button',{name:'Overview',exact:true}).click();await page.screenshot({path:'test-results/dark.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'test-results/mobile.png',fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Mobile layout must not overflow');
+  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.getByRole('button',{name:'Connections',exact:true}).click();await page.getByRole('heading',{name:'Connected, thoughtfully.'}).waitFor();
+  assert.deepEqual(external,[],'The preview must make zero external requests');assert.deepEqual(errors,[],'No browser runtime errors');
+  // Production page: Firebase-only outbound destinations, auth dialog and CSP.
+  await page.setViewportSize({width:1440,height:1000});await page.route('https://**/*',route=>route.abort());
+  await page.goto(origin);await page.getByRole('button',{name:'Sign in',exact:true}).first().click();await page.getByRole('heading',{name:'Welcome back.'}).waitFor();
+  assert.equal(await page.locator('meta[http-equiv="Content-Security-Policy"]').count(),1);
+  assert.ok(external.every(url=>['firestore.googleapis.com','identitytoolkit.googleapis.com','securetoken.googleapis.com'].includes(new URL(url).hostname)));
+  assert.deepEqual(errors,[]);console.log('PASS: desktop/mobile, dot creation, schedules, memory deletion, task submission/cancel, XSS rendering, theme, auth UI, CSP, Firebase-only networking.');
+}catch(e){await page.screenshot({path:'test-results/failure.png',fullPage:true});console.error('Browser errors:',errors);console.error('Visible form error:',await page.locator('.form-error').allTextContents());throw e;}finally{await browser.close();server.close();}

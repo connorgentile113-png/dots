@@ -1,0 +1,11 @@
+import { build } from 'esbuild';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+const result=await build({entryPoints:['src/app.js'],bundle:true,minify:true,format:'iife',target:['es2022'],write:false,legalComments:'none'});
+const script=result.outputFiles[0].text.replace(/<\/script/gi,'<\\/script');
+const css=(await readFile('src/style.css','utf8')).replace(/@import[^;]+;/g,'');
+const digest=createHash('sha256').update(script).digest('base64');
+const policy=`default-src 'none'; script-src 'sha256-${digest}'; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; font-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`;
+const html=(await readFile('src/index.html','utf8')).replace('<!-- CSP -->',()=>`<meta http-equiv="Content-Security-Policy" content="${policy}">`).replace('/* STYLES */',()=>css).replace('/* APP */',()=>script);
+await mkdir('public',{recursive:true});await writeFile('index.html',html);await writeFile('public/index.html',html);
+console.log(`Built single-file HTML (${Math.round(Buffer.byteLength(html)/1024)} KiB); Firebase SDK embedded, no runtime CDN.`);

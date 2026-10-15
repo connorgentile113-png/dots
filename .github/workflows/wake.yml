@@ -1,0 +1,27 @@
+name: Scheduled Dots work
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: dots-scheduler
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Deliver scheduled work
+        env:
+          DOTS_BACKEND_URL: ${{ secrets.DOTS_BACKEND_URL }}
+          DOTS_WAKE_SECRET: ${{ secrets.DOTS_WAKE_SECRET }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,hmac,os,time,urllib.request
+          timestamp=str(int(time.time()*1000))
+          signature=hmac.new(os.environ['DOTS_WAKE_SECRET'].encode(),timestamp.encode(),hashlib.sha256).hexdigest()
+          request=urllib.request.Request(os.environ['DOTS_BACKEND_URL'].rstrip('/')+'/wake',data=b'{}',headers={'Content-Type':'application/json','X-Dots-Time':timestamp,'X-Dots-Signature':signature})
+          with urllib.request.urlopen(request,timeout=50) as response:
+              print('Scheduled work accepted:',response.status)
+          PY

@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {"collectionGroup":"schedules","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"enabled","order":"ASCENDING"},{"fieldPath":"nextRunAt","order":"ASCENDING"}]},
+    {"collectionGroup":"runs","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"nextRunAt","order":"ASCENDING"}]},
+    {"collectionGroup":"commands","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"createdAt","order":"ASCENDING"}]},
+    {"collectionGroup":"commands","queryScope":"COLLECTION","fields":[{"fieldPath":"uid","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]}
+  ],
+  "fieldOverrides": [
+    {"collectionGroup":"streams","fieldPath":"frame","indexes":[]},
+    {"collectionGroup":"runs","fieldPath":"context","indexes":[]},
+    {"collectionGroup":"memories","fieldPath":"text","indexes":[]}
+  ]
+}
