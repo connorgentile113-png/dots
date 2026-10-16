@@ -22,15 +22,15 @@ export async function safeURL(raw, resolver = lookup) {
 // `label`/`note`/`tags` drive the model picker in the interface; `timeoutMs` raises the request
 // timeout for models whose cold start is known to be slow.
 export const MODEL_CATALOG = [
-  { id:'nvidia/nemotron-3.5-lightning-30b-a3b', label:'Nemotron 3.5 Lightning', note:'Fast all-rounder. The safe default for everyday chats and tools.', tags:['tool calls','fast'] },
-  { id:'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', label:'Nemotron 3 Nano Omni', note:'Small reasoning model for planning and careful analysis.', tags:['tool calls','reasoning'] },
-  { id:'nvidia/nemotron-3-super-120b-a12b', label:'Nemotron 3 Super 120B', note:'Stronger judgement on multi-step work. Slower than Lightning.', tags:['tool calls','reasoning'] },
-  { id:'nvidia/nemotron-3-ultra-550b-a55b', label:'Nemotron 3 Ultra 550B', note:'Deepest reasoning for hard planning. The slowest option here.', tags:['tool calls','reasoning','slow'] },
-  { id:'z-ai/glm-5.3', label:'GLM 5.3', note:'Capable general model with dependable tool calls.', tags:['tool calls','balanced'] },
+  { id:'nvidia/nemotron-3.5-lightning-30b-a3b', label:'Nemotron 3.5 Lightning', note:'Fast all-rounder. The safe default for everyday chats and tools.', tags:['tool calls','fast'], timeoutMs:120000 },
+  { id:'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', label:'Nemotron 3 Nano Omni', note:'Small reasoning model for planning and careful analysis.', tags:['tool calls','reasoning'], timeoutMs:120000 },
+  { id:'nvidia/nemotron-3-super-120b-a12b', label:'Nemotron 3 Super 120B', note:'Stronger judgement on multi-step work. Slower than Lightning.', tags:['tool calls','reasoning'], timeoutMs:180000 },
+  { id:'nvidia/nemotron-3-ultra-550b-a55b', label:'Nemotron 3 Ultra 550B', note:'Deepest reasoning for hard planning. The slowest option here.', tags:['tool calls','reasoning','slow'], timeoutMs:240000 },
+  { id:'z-ai/glm-5.3', label:'GLM 5.3', note:'Capable general model with dependable tool calls.', tags:['tool calls','balanced'], timeoutMs:150000 },
   { id:'z-ai/glm-5.3-flash', label:'GLM 5.3 Flash', note:'Lighter general model. Cold starts can be slow.', tags:['tool calls','slow'], timeoutMs:150000 },
-  { id:'openai/gpt-oss-20b', label:'GPT-OSS 20B', note:'Compact open-weight model for short, simple tasks.', tags:['tool calls','fast'] },
-  { id:'meta/muse-glimmer-30b', label:'Muse Glimmer 30B', note:'Comfortable with writing, summaries and wording.', tags:['tool calls','writing'] },
-  { id:'stepfun-ai/step-5-preview', label:'Step 5 Preview', note:'Preview model. Behaviour may change without notice.', tags:['tool calls','preview'] }
+  { id:'openai/gpt-oss-20b', label:'GPT-OSS 20B', note:'Compact open-weight model for short, simple tasks.', tags:['tool calls','fast'], timeoutMs:120000 },
+  { id:'meta/muse-glimmer-30b', label:'Muse Glimmer 30B', note:'Comfortable with writing, summaries and wording.', tags:['tool calls','writing'], timeoutMs:150000 },
+  { id:'stepfun-ai/step-5-preview', label:'Step 5 Preview', note:'Preview model. Behaviour may change without notice.', tags:['tool calls','preview'], timeoutMs:150000 }
 ].map(model => ({
   ...model,
   tools:true,
@@ -72,11 +72,23 @@ export class Providers {
     const now = Date.now(), cooldown = await this.store.get('system/nvidia');
     if (cooldown?.until > now) throw new DeferredError('NVIDIA cooldown', cooldown.until);
     await this.quota(`nvidia_${dayKey(now)}`,1,Number(this.env.DAILY_MODEL_CALLS || 100),nextUtcDay(now));
-    const response = await this.fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method:'POST', headers:{'Authorization':`Bearer ${this.env.NVIDIA_API_KEY}`,'Content-Type':'application/json'},
-      body:JSON.stringify({model,messages,temperature:0.2,max_tokens:1800,stream:false,...(recovery ? {} : {tools:TOOL_DEFINITIONS,tool_choice:'auto'})}),
-      signal:AbortSignal.timeout(Math.max(Number(this.env.MODEL_TIMEOUT_MS || 85000),this.models.find(m => m.id === model)?.timeoutMs || 0))
-    });
+    let response;
+    try {
+      response = await this.fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method:'POST', headers:{'Authorization':`Bearer ${this.env.NVIDIA_API_KEY}`,'Content-Type':'application/json'},
+        body:JSON.stringify({model,messages,temperature:0.2,max_tokens:1800,stream:false,...(recovery ? {} : {tools:TOOL_DEFINITIONS,tool_choice:'auto'})}),
+        signal:AbortSignal.timeout(Math.max(Number(this.env.MODEL_TIMEOUT_MS || 85000),this.models.find(m => m.id === model)?.timeoutMs || 0))
+      });
+    } catch (e) {
+      // The free tier is occasionally slower than any timeout we can promise. Waiting is
+      // better than failing the user's task, but not forever: three slow attempts end it.
+      if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        const attempt = await this.store.atomic('system/nvidia_timeout', current => ({ value:{ attempts:(current?.attempts || 0) + 1 }, result:(current?.attempts || 0) + 1 }));
+        if (attempt > 3) { await this.store.set('system/nvidia_timeout',{attempts:0}); throw new Error('The model did not answer in time after three attempts'); }
+        throw new DeferredError(`The model is slow right now; trying again in a moment (attempt ${attempt} of 3)`, Date.now()+45000, 'nvidia');
+      }
+      throw e;
+    }
     if (response.status === 429 || response.status === 503) {
       const until = retryAt(response.headers,cooldown?.attempt || 0);
       await this.store.set('system/nvidia',{until,attempt:(cooldown?.attempt || 0)+1});
@@ -86,6 +98,7 @@ export class Providers {
     const data = await response.json(), choice = data.choices?.[0];
     if (!choice?.message) throw new Error('NVIDIA returned no assistant response');
     await this.store.set('system/nvidia',{until:0,attempt:0});
+    await this.store.set('system/nvidia_timeout',{attempts:0});
     return {message:choice.message,truncated:choice.finish_reason === 'length',usage:data.usage || {}};
   }
   async browser(uid, runId, args) {

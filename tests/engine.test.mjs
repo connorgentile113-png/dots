@@ -174,11 +174,26 @@ test('status publishes the free model catalog and the wake-up rhythm for the int
   assert.equal(profile.pulseMinutes,30);assert.ok(profile.pulseAt>Date.now());assert.ok(profile.workerSeenAt);assert.equal(profile.workerState,'online');
   assert.equal(profile.workerVersion,'1.1.0');
 });
+test('a slow model request waits and retries instead of failing the task',async()=>{
+  const store=new MemoryStore();let requests=0;
+  const providers=new Providers(store,{NVIDIA_API_KEY:'test-only',DAILY_MODEL_CALLS:'10'},async()=>{requests++;const e=new Error('aborted');e.name='AbortError';throw e;});
+  for(let i=0;i<3;i++)await assert.rejects(()=>providers.model([],'model'),DeferredError);
+  assert.equal(requests,3,'A slow answer is retried rather than failed');
+  assert.equal((await store.get('system/nvidia_timeout')).attempts,3);
+  await assert.rejects(()=>providers.model([],'model'),/did not answer in time/);
+  // A normal answer clears the slow-attempt tally.
+  const fresh=new MemoryStore();let calls=0;
+  const other=new Providers(fresh,{NVIDIA_API_KEY:'test-only',DAILY_MODEL_CALLS:'10'},async()=>{calls++;if(calls===1){const e=new Error('slow');e.name='TimeoutError';throw e;}return new Response(JSON.stringify({choices:[{message:{role:'assistant',content:'ok'}}],usage:{}}),{status:200});});
+  await assert.rejects(()=>other.model([],'model'),DeferredError);
+  assert.equal((await other.model([],'model')).message.content,'ok');
+  assert.equal((await fresh.get('system/nvidia_timeout')).attempts,0);
+});
 test('the free model catalog advertises only tool-capable models and honours the operator allow-list',()=>{
   const providers=new Providers(new MemoryStore(),{});
   const list=providers.catalog();
   assert.ok(list.length>=8,'Several free models are offered');
   assert.ok(list.every(m=>m.tools&&m.id.includes('/')&&m.label&&m.id.length>0));
+  assert.ok(providers.models.every(m=>(m.timeoutMs||0)>=120000),'Every free model allows for a slow first answer');
   assert.ok(list.some(m=>m.id==='nvidia/nemotron-3.5-lightning-30b-a3b'));
   assert.ok(list.some(m=>m.id==='z-ai/glm-5.3'));
   const narrowed=new Providers(new MemoryStore(),{NVIDIA_MODELS:'z-ai/glm-5.3,custom/model-x',NVIDIA_DEFAULT_MODEL:'custom/model-x'});
