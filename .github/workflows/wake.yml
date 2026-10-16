@@ -17,10 +17,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-      - name: Install dependencies when fallback worker is needed
-        if: ${{ secrets.DOTS_BACKEND_URL == '' }}
-        run: npm ci --omit=dev
-      - name: Deliver scheduled work
+      - name: Install dependencies and deliver scheduled work
         env:
           DOTS_BACKEND_URL: ${{ secrets.DOTS_BACKEND_URL }}
           DOTS_WAKE_SECRET: ${{ secrets.DOTS_WAKE_SECRET }}
@@ -30,13 +27,14 @@ jobs:
         run: |
           if [ -n "$DOTS_BACKEND_URL" ]; then
             python3 - <<'PY'
-            import hashlib,hmac,os,time,urllib.request
-            timestamp=str(int(time.time()*1000))
-            signature=hmac.new(os.environ['DOTS_WAKE_SECRET'].encode(),timestamp.encode(),hashlib.sha256).hexdigest()
-            request=urllib.request.Request(os.environ['DOTS_BACKEND_URL'].rstrip('/')+'/wake',data=b'{}',headers={'Content-Type':'application/json','X-Dots-Time':timestamp,'X-Dots-Signature':signature})
-            with urllib.request.urlopen(request,timeout=50) as response:
-                print('Scheduled work accepted:',response.status)
-            PY
+          import hashlib,hmac,os,time,urllib.request
+          timestamp=str(int(time.time()*1000))
+          signature=hmac.new(os.environ['DOTS_WAKE_SECRET'].encode(),timestamp.encode(),hashlib.sha256).hexdigest()
+          request=urllib.request.Request(os.environ['DOTS_BACKEND_URL'].rstrip('/')+'/wake',data=b'{}',headers={'Content-Type':'application/json','X-Dots-Time':timestamp,'X-Dots-Signature':signature})
+          with urllib.request.urlopen(request,timeout=50) as response:
+              print('Scheduled work accepted:',response.status)
+          PY
           else
+            npm ci --omit=dev
             GITHUB_WAKE_SECRET="$DOTS_WAKE_SECRET" node scripts/run-once.mjs
           fi
