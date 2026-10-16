@@ -9,7 +9,8 @@ on:
       script_b64: {required: true, type: string}
       callback_url: {required: true, type: string}
       callback_token: {required: true, type: string}
-permissions: {}
+permissions:
+  contents: read
 concurrency:
   group: dots-command-${{ inputs.operation_id }}
   cancel-in-progress: false
