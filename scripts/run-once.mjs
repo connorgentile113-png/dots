@@ -1,7 +1,7 @@
 import { runtime } from '../server/runtime.mjs';
 const {db,store,engine}=runtime();
-const deadline=Date.now()+24000;
-const hardStop=setTimeout(()=>process.exit(0),32000);
+const deadline=Date.now()+90000;
+const hardStop=setTimeout(()=>process.exit(0),110000);
 try {
   await engine.tick();
   while(Date.now()<deadline) {

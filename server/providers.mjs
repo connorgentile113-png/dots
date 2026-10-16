@@ -29,7 +29,7 @@ export const TOOL_DEFINITIONS = [
 export class Providers {
   constructor(store, env = process.env, fetcher = fetch) {
     this.store = store; this.env = env; this.fetch = fetcher;
-    this.models = (env.NVIDIA_MODELS || 'nvidia/nemotron-3.5-lightning-30b-a3b,deepseek-ai/deepseek-v4.1-flash,z-ai/glm-5.3-flash').split(',').map(id => ({ id:id.trim(),tools:true,coding:/coder|code|deepseek|kimi/i.test(id),reasoning:/deepseek|nemotron|qwen|glm/i.test(id),fast:/8b|mini|small|flash|lightning/i.test(id) }));
+    this.models = (env.NVIDIA_MODELS || 'nvidia/nemotron-3.5-lightning-30b-a3b,deepseek-ai/deepseek-v4.1-flash,z-ai/glm-5.3-flash').split(',').map(id => ({ id:id.trim(),tools:true,coding:/coder|code|deepseek|kimi|nemotron/i.test(id),reasoning:/deepseek|nemotron|qwen|glm/i.test(id),fast:/8b|mini|small|flash|lightning/i.test(id) }));
   }
   async quota(key, amount, maximum, resetAt) {
     const allowed = await this.store.atomic(`system/${key}`, current => {
