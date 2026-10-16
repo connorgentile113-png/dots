@@ -313,7 +313,8 @@ export class Engine {
     for(const [name,key,max] of [['cloudflare',`cloudflare_${dayKey()}`,540],['browserless',`browserless_${monthKey()}`,Number(this.env.BROWSERLESS_MONTHLY_UNITS||0)],['nvidia',`nvidia_${dayKey()}`,Number(this.env.DAILY_MODEL_CALLS||100)]]) {
       const quota=await this.store.get(`system/${key}`); await this.store.set(userPath(uid,'usage',name),{used:quota?.used||0,max,resetAt:quota?.resetAt||0,updatedAt:now});
     }
-    await this.store.set(userPath(uid,'connections','providers'),{nvidia:!!this.env.NVIDIA_API_KEY,cloudflare:!!this.env.CLOUDFLARE_API_TOKEN,browserless:!!this.env.BROWSERLESS_TOKEN&&Number(this.env.BROWSERLESS_MONTHLY_UNITS)>0,github:!!this.env.GITHUB_TOKEN,backup:this.env.GITHUB_BACKUP_ENABLED==='true'});
+    // A worker with a public HTTPS origin is the always-on one; the scheduled runners have no PUBLIC_BACKEND_URL.
+    await this.store.set(userPath(uid,'connections','providers'),{nvidia:!!this.env.NVIDIA_API_KEY,cloudflare:!!this.env.CLOUDFLARE_API_TOKEN,browserless:!!this.env.BROWSERLESS_TOKEN&&Number(this.env.BROWSERLESS_MONTHLY_UNITS)>0,github:!!this.env.GITHUB_TOKEN,koyeb:!!this.env.PUBLIC_BACKEND_URL,backup:this.env.GITHUB_BACKUP_ENABLED==='true'});
   }
   async tick() {
     if(this.busy) return; this.busy=true;
