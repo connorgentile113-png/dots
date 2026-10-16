@@ -4,12 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { runtime } from './runtime.mjs';
 import { identifier } from './core.mjs';
 
+export const VERSION = '1.1.0';
 export function equalToken(a,b) { return typeof a==='string' && typeof b==='string' && a.length===b.length && timingSafeEqual(Buffer.from(a),Buffer.from(b)); }
 export function makeServer(engine, env = process.env) {
   return http.createServer(async (req,res)=> {
     res.setHeader('Content-Type','application/json'); res.setHeader('Cache-Control','no-store');
     const reply=(status,value)=>{res.writeHead(status);res.end(JSON.stringify(value));};
-    if(req.url==='/health' && req.method==='GET') return reply(200,{ok:true,service:'dots-worker'});
+    if(req.url==='/health' && req.method==='GET') return reply(200,{ok:true,service:'dots-worker',version:VERSION,uptimeSeconds:Math.round(process.uptime()),models:engine.providers?.models?.map(m=>m.id) || []});
     if(req.method!=='POST' || !['/wake','/command-result','/command-output'].includes(req.url)) return reply(404,{error:'Not found'});
     let raw='';
     try {

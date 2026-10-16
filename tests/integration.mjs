@@ -6,7 +6,7 @@ import { Engine } from '../server/engine.mjs';
 process.env.FIRESTORE_EMULATOR_HOST='127.0.0.1:8088';
 const app=initializeApp({projectId:'demo-dots'},'integration'),db=getFirestore(app),store=new FirestoreStore(db);
 let modelCalls=0;
-const provider={models:[{id:'test-model',tools:true}],model:async()=>{modelCalls++;return {message:{role:'assistant',content:'Integration result: scheduled task processed from a durable Firestore record.'},usage:{},truncated:false};}};
+const provider={models:[{id:'test-model',tools:true}],catalog:()=>[{id:'test-model',label:'test-model',note:'',tags:[],tools:true}],model:async()=>{modelCalls++;return {message:{role:'assistant',content:'Integration result: scheduled task processed from a durable Firestore record.'},usage:{},truncated:false};}};
 const engine=new Engine(store,provider,{});
 try{
   await db.recursiveDelete(db.collection('commands'));

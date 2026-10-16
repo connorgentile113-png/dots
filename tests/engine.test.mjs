@@ -11,7 +11,7 @@ const done=content=>({message:{role:'assistant',content},usage:{},truncated:fals
 const tool=(name,args,id='tool1')=>({message:{role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name,arguments:JSON.stringify(args)}}]},truncated:false});
 async function fixture(responses=[]){
   const store=new MemoryStore(),calls=[];
-  const providers={models:[{id:'model-a',tools:true}],model:async(messages,model,options)=>{calls.push({messages,model,options});const response=responses.shift();if(response instanceof Error)throw response;return response||done('Verified result');},browser:async()=>({title:'Public source',text:'Evidence',url:'https://example.com'}),dispatchCommand:async()=>({status:'dispatched'}),backup:async()=>{}};
+  const providers={models:[{id:'model-a',tools:true}],catalog:()=>[{id:'model-a',label:'model-a',note:'',tags:[],tools:true}],model:async(messages,model,options)=>{calls.push({messages,model,options});const response=responses.shift();if(response instanceof Error)throw response;return response||done('Verified result');},browser:async()=>({title:'Public source',text:'Evidence',url:'https://example.com'}),dispatchCommand:async()=>({status:'dispatched'}),backup:async()=>{}};
   const engine=new Engine(store,providers,{MAX_RUN_STEPS:'5'});
   await store.set('users/alice',{enabled:true});
   await store.set('users/alice/dots/default',{name:'Everyday',instructions:'Verify results',model:'auto',allowBrowser:true,allowSchedules:true,allowTerminal:true});
@@ -112,6 +112,79 @@ test('provider 429 respects retry-after and shares cooldown across model calls',
 });
 test('retry dates are parsed without inventing a reset time',()=>{const now=Date.now();assert.equal(retryAt(new Headers({'Retry-After':'60'}),0,now),now+60000);assert.ok(retryAt(new Headers(),2,now,()=>0)>now+60000);});
 test('GitHub backups refuse public repositories',async()=>{const p=new Providers(new MemoryStore(),{GITHUB_TOKEN:'test',GITHUB_REPOSITORY:'owner/repo',BACKUP_KEY_BASE64:randomBytes(32).toString('base64'),GITHUB_BACKUP_ENABLED:'true'},async()=>new Response(JSON.stringify({private:false,default_branch:'main'})));await assert.rejects(()=>p.backup({test:true}),/private/);});
+test('every workspace gets a 30-minute wake-up rhythm that really runs',async()=>{
+  const f=await fixture([done('Nothing needs doing right now.')]);
+  const pulse=await f.engine.ensureWorkspace('alice');
+  assert.equal(pulse.spec.kind,'interval');assert.equal(pulse.spec.minutes,30);assert.equal(pulse.system,true);assert.equal(pulse.dotId,'default');
+  const again=await f.engine.ensureWorkspace('alice');
+  assert.equal(again.createdAt,pulse.createdAt,'The wake-up schedule is created once');
+  assert.equal((await f.store.list('users/alice/schedules')).length,1,'No duplicate rhythms');
+  await f.store.set('users/alice/schedules/pulse',{nextRunAt:Date.now()-1000});
+  await f.engine.dispatchSchedules(Date.now());
+  const runs=await f.store.list('users/alice/runs');
+  assert.equal(runs.length,1);assert.equal(runs[0].dotId,'default');assert.equal(runs[0].source,'schedule');assert.equal(runs[0].threadId,'pulse');
+  await f.engine.runStep(runs[0]);
+  assert.equal((await f.store.get(`users/alice/runs/${runs[0].id}`)).status,'completed');
+  // A user who pauses the automatic wake-up keeps it paused.
+  await f.store.set('users/alice/schedules/pulse',{enabled:false});
+  assert.equal((await f.engine.ensureWorkspace('alice')).enabled,false);
+});
+test('a chat keeps its thread: a follow-up continues the earlier answer',async()=>{
+  const f=await fixture([done('First answer'),done('Second answer')]);
+  assert.equal((await queuedCommand(f,'c1','start',{prompt:'First question',threadId:'thread-1'})).status,'done');
+  await f.engine.runStep(await f.store.get('users/alice/runs/c1'));
+  await queuedCommand(f,'c2','start',{prompt:'Follow-up question',threadId:'thread-1'});
+  const run=await f.store.get('users/alice/runs/c2');
+  assert.equal(run.threadId,'thread-1');assert.equal(run.source,'chat');
+  const seeded=run.context.map(m=>m.content).join(' ');
+  assert.match(seeded,/First question/);assert.match(seeded,/First answer/);
+  assert.equal((await f.store.get('users/alice')).activeThreadId,'thread-1');
+  await f.engine.runStep(run);
+  assert.equal(f.calls.at(-1).messages.at(-2).content,'First question','The newest model call carries the thread history');
+});
+test('a dot can branch out and create a new dot with its own rhythm',async()=>{
+  const f=await fixture([tool('spawn_dot',{name:'Price watcher',description:'Watch one page.',instructions:'Check the price page.',minutes:30}),done('Created a watcher.')]);
+  await f.engine.runStep(await run(f));
+  const spawned=(await f.store.list('users/alice/dots')).find(d=>d.id.startsWith('dot_'));
+  assert.ok(spawned,'A new dot exists');assert.equal(spawned.parentId,'default');assert.equal(spawned.depth,1);assert.equal(spawned.allowSpawn,true);assert.equal(spawned.model,'auto');
+  assert.match(spawned.instructions,/Check the price page/);assert.equal(spawned.description,'Watch one page.');
+  const schedule=(await f.store.list('users/alice/schedules')).find(s=>s.dotId===spawned.id);
+  assert.equal(schedule.spec.minutes,30);
+  assert.match(schedule.prompt,/Watch one page\./);assert.match(schedule.prompt,/Check the price page/);assert.match(schedule.prompt,/Automatic wake-up/);
+  const messages=await f.store.list('users/alice/messages');
+  assert.ok(messages.some(m=>m.content.includes('Price watcher is a new dot now')));
+});
+test('branching respects dot permission, lineage depth and the dot limit',async()=>{
+  const f=await fixture();
+  const parent=await f.store.get('users/alice/dots/default');
+  await assert.rejects(()=>f.engine.spawnDot({uid:'alice',id:'r',dotId:'default'},{...parent,depth:3},{name:'Too deep',instructions:'x'}),/deep enough/);
+  for(let i=0;i<19;i++)await f.store.set(`users/alice/dots/fill${i}`,{name:`Filler ${i}`,instructions:'x'});
+  await assert.rejects(()=>f.engine.spawnDot({uid:'alice',id:'r',dotId:'default'},parent,{name:'Overflow',instructions:'x'}),/Maximum 20 dots/);
+  const g=await fixture([tool('spawn_dot',{name:'Nope',instructions:'x'})]);
+  await g.store.set('users/alice/dots/default',{allowSpawn:false});
+  await g.engine.runStep(await run(g));
+  assert.match((await g.store.get('users/alice/runs/run1')).context.at(-1).content,/disabled/);
+  assert.equal((await g.store.list('users/alice/dots')).length,1);
+});
+test('status publishes the free model catalog and the wake-up rhythm for the interface',async()=>{
+  const f=await fixture();
+  await f.engine.publishStatus('alice');
+  const profile=await f.store.get('users/alice');
+  assert.deepEqual(profile.modelCatalog,[{id:'model-a',label:'model-a',note:'',tags:[],tools:true}]);
+  assert.equal(profile.pulseMinutes,30);assert.ok(profile.pulseAt>Date.now());assert.ok(profile.workerSeenAt);assert.equal(profile.workerState,'online');
+  assert.equal(profile.workerVersion,'1.1.0');
+});
+test('the free model catalog advertises only tool-capable models and honours the operator allow-list',()=>{
+  const providers=new Providers(new MemoryStore(),{});
+  const list=providers.catalog();
+  assert.ok(list.length>=8,'Several free models are offered');
+  assert.ok(list.every(m=>m.tools&&m.id.includes('/')&&m.label&&m.id.length>0));
+  assert.ok(list.some(m=>m.id==='nvidia/nemotron-3.5-lightning-30b-a3b'));
+  assert.ok(list.some(m=>m.id==='z-ai/glm-5.3'));
+  const narrowed=new Providers(new MemoryStore(),{NVIDIA_MODELS:'z-ai/glm-5.3,custom/model-x',NVIDIA_DEFAULT_MODEL:'custom/model-x'});
+  assert.deepEqual(narrowed.catalog().map(m=>m.id),['z-ai/glm-5.3','custom/model-x']);
+  assert.equal(narrowed.defaultModel,'custom/model-x');
+});
 test('HTTP wake rejects unauthenticated requests and accepts signed fresh requests',async t=>{
   let count=0;const server=makeServer({tick:async()=>{count++;}}, {GITHUB_WAKE_SECRET:'test-secret'});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>server.close());const url=`http://127.0.0.1:${server.address().port}/wake`;
   assert.equal((await fetch(url,{method:'POST',body:'{}'})).status,401);
